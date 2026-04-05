@@ -1,0 +1,15 @@
+[session]
+wake_time        = "08:00"   # Your typical wake time (24h)
+kickoff_offset_h = 3         # Hours before wake to fire first kickoff
+session_hours    = 5         # Claude session window length
+
+[queue]
+vault_path       = "~/Documents/Obsidian"
+queue_file       = "active-projects.md"
+
+[api]
+kickoff_message  = "k"
+
+[notifications]
+enabled          = true
+warn_at_minutes  = 30        # Notify when this many minutes remain
