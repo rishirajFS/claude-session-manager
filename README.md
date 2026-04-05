@@ -1,142 +1,144 @@
 # Claude Session Manager
 
-A macOS background daemon and CLI tool that maximizes usable Claude sessions per day by automatically starting each 5-hour session window at the optimal time.
+Claude Pro/Max gives you a 5-hour usage window that starts from your **first message of the day**. If you open Claude at 9 AM, your window runs 9 AM–2 PM, then resets, giving you maybe 3 usable sessions in a waking day.
 
-## The Problem
+This tool runs silently in the background and sends a single throwaway message the moment each session window opens — including while you're asleep — so by the time you wake up, your first window is already running and you haven't wasted any time.
 
-Claude Pro/Max resets every 5 hours from first use. Starting your first session at 8 AM gives you 3 sessions in a waking day. Pre-starting a session at 5 AM (while asleep) gives you 5 — a 67% throughput increase with zero extra effort.
+**Before (no tool):** wake up at 8 AM, start Claude, get sessions from 8 AM → 1 PM → 6 PM. That's 3 sessions covering ~15 hours of your day.
 
-| Session | Start | End | Status |
-|---------|-------|-----|--------|
-| 1 | 5:00 AM | 10:00 AM | Asleep — daemon fires kickoff |
-| 2 | 10:00 AM | 3:00 PM | Awake — 5 full hours |
-| 3 | 3:00 PM | 8:00 PM | Awake — 5 full hours |
-| 4 | 8:00 PM | 1:00 AM | Awake — 5 full hours |
-| 5 | 1:00 AM | 6:00 AM | Asleep — daemon fires kickoff |
+**After (with tool):** watcher fires at 5 AM while you're asleep, sessions chain from 5 AM → 10 AM → 3 PM → 8 PM → 1 AM. You wake up to a session already in progress, and get 4+ full sessions covering your entire waking day.
 
-## How It Works
+---
 
-The daemon fires `claude -p "k"` at the scheduled kickoff time. This uses your existing Claude Code session (no API key required) and costs ~2 tokens — just enough to start the session clock. Sessions then chain automatically: when one expires, the daemon immediately fires the next kickoff.
+## What you need
 
-## Setup
+- macOS
+- Python 3.11 or later (`python3 --version` to check)
+- [Claude Code](https://claude.ai/code) installed and logged in (`claude --version` to check)
 
-**Requirements:** macOS, Python 3.11+, [Claude Code CLI](https://claude.ai/code) installed and logged in.
+That's it. No API key, no separate account. It uses the same Claude login you already have.
+
+---
+
+## Setup (one time)
 
 ```bash
-git clone https://github.com/FettesSchwein/claude-session-manager
+git clone https://github.com/rishirajFS/claude-session-manager
 cd claude-session-manager
-
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
 ```
 
-Edit `config.toml` to match your schedule:
+---
 
-```toml
-[session]
-wake_time        = "08:00"   # your typical wake time
-kickoff_offset_h = 3         # hours before wake to fire first kickoff
-```
-
-## Usage
-
-**Start the daemon** (keep this running in the background):
+## Starting the watcher
 
 ```bash
-python daemon.py
+.venv/bin/python watcher.py --start
 ```
 
-**Check session status / open the menu:**
+That's all. It forks into the background and starts watching. You'll see:
+
+```
+Started (PID 12345). Logs: /Users/you/.claude-session/watcher.log
+```
+
+From here, it runs silently. Every 15–20 minutes it checks whether your 5-hour window has expired. When it has, it fires `claude -p "k"` — a single one-character message that starts the next window — and goes back to sleep.
+
+---
+
+## Day-to-day use
+
+**Check if it's running and how much time is left in your current session:**
 
 ```bash
-python cli_menu.py
+.venv/bin/python watcher.py --status
 ```
 
 ```
-  Claude Session Manager
-  ----------------------------------------
-  Session: ACTIVE  |  4h 58m remaining
-  Queue:   2 projects
-
-  [1] Use this session myself
-  [2] Run project queue
-  [3] View / edit queue
-  [4] Skip this session
+Watcher:  RUNNING
+Session:  ACTIVE — 3h 42m remaining (resets 14:30)
 ```
 
-**If you started a Claude session manually** (outside the daemon), resync the clock:
+**If you opened Claude yourself before the watcher fired** (e.g. you couldn't wait), tell it so the clock is accurate:
 
 ```bash
-python cli_menu.py --manual-start
+.venv/bin/python watcher.py --reset
 ```
 
-## Menu Options
+This sets the session start to right now. Without this, the watcher might fire an extra kickoff thinking the previous session expired when it hadn't.
 
-| Option | What it does |
-|--------|-------------|
-| **[1] Use this session myself** | Daemon backs off. You use Claude normally. Resumes automatically on next session reset. |
-| **[2] Run project queue** | Daemon sends continuation prompts from your queue file. *(Phase 3)* |
-| **[3] View / edit queue** | Opens `active-projects.md` in `$EDITOR`. Creates the file with a template if it doesn't exist. |
-| **[4] Skip this session** | Daemon idles. Session expires unused. Kickoff fires automatically for the next one. |
-
-## Project Queue Format
-
-The queue lives at `~/Documents/Obsidian/active-projects.md` (configurable in `config.toml`):
-
-```markdown
-## active-projects
-
-### 1. KV Cache Benchmarks
-status: in-progress
-next-step: Run prefetch experiments on V100, log throughput delta vs baseline
-context-file: [[kv-cache/experiment-log]]
-priority: high
-
-### 2. HARBOR LoRA Fine-tuning
-status: blocked-on-session
-next-step: Resume SFT on College Experience dataset, epoch 3
-priority: medium
-```
-
-Fields: `status` (in-progress | blocked-on-session | done), `next-step` (sent to Claude as the continuation prompt), `context-file` (optional Obsidian wikilink injected before the prompt), `priority` (high | medium | low).
-
-## State
-
-Session state is stored at `~/.claude-session/state.json`. Never committed.
-
-## Configuration
-
-Full `config.toml` reference:
-
-```toml
-[session]
-wake_time        = "08:00"   # 24h format
-kickoff_offset_h = 3         # hours before wake_time to fire kickoff
-session_hours    = 5         # Claude session window length
-
-[queue]
-vault_path       = "~/Documents/Obsidian"
-queue_file       = "active-projects.md"
-
-[api]
-kickoff_message  = "k"       # message sent to start the session clock
-
-[notifications]
-enabled          = true
-warn_at_minutes  = 30        # Mac notification when this many minutes remain
-```
-
-## Running Tests
+**Stop the watcher:**
 
 ```bash
-.venv/bin/pytest tests/ -v
+.venv/bin/python watcher.py --stop
 ```
 
-## Build Status
+---
 
-- [x] Phase 1 — Core daemon, session clock, notifications, basic status display
-- [x] Phase 2 — Interactive CLI menu, daemon backoff, queue file editor
-- [ ] Phase 3 — Project queue execution (option 2)
-- [ ] Phase 4 — Obsidian wikilink context injection
-- [ ] Phase 5 — launchd auto-launch, manual clock resync polish
+## Run on login automatically
+
+So you never have to remember to start it:
+
+```bash
+./install.sh
+```
+
+This installs a launchd agent that starts the watcher every time you log in to your Mac. To remove it:
+
+```bash
+./uninstall.sh
+```
+
+---
+
+## Checking the logs
+
+```bash
+tail -f ~/.claude-session/watcher.log
+```
+
+You'll see a line each time a session fires, and when the next check is scheduled:
+
+```
+Claude session watcher running. Ctrl+C to stop.
+[05:00] Session started. Resets at 10:00.
+  Next check at 05:17.
+[10:02] Session started. Resets at 15:02.
+  Next check at 10:19.
+```
+
+---
+
+## Verifying it works
+
+The watcher assumes that `claude -p "k"` (Claude Code CLI) shares the same 5-hour session pool as claude.ai. To confirm this on your account:
+
+```bash
+.venv/bin/python cli_menu.py --verify
+```
+
+This walks you through the test: check your reset time on claude.ai, send the kickoff, check again. If the reset time updated, you're good.
+
+---
+
+## One important edge case
+
+The watcher tracks session start time **locally** in `~/.claude-session/state.json`. It has no way to see your actual usage on claude.ai. This means:
+
+- If you use Claude heavily and hit your limit early, the watcher doesn't know — it will still fire at the calculated reset time, which is fine.
+- If you start a Claude session manually without telling the watcher, run `--reset` so the clocks stay in sync.
+- The state file is just JSON, so you can inspect or edit it directly if anything looks off.
+
+---
+
+## Commands
+
+| Command | What it does |
+|---------|-------------|
+| `python watcher.py --start` | Start in background |
+| `python watcher.py --stop` | Stop background process |
+| `python watcher.py --status` | Show watcher state and time remaining |
+| `python watcher.py --reset` | Resync clock to now (use after a manual session start) |
+| `python watcher.py` | Run in foreground — useful for testing |
+| `python cli_menu.py --verify` | Walk through the session clock verification test |
