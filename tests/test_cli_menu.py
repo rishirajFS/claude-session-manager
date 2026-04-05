@@ -7,9 +7,11 @@ import pytest
 from cli_menu import (
     _handle_option_1,
     _handle_option_4,
+    _handle_option_5,
     format_duration,
     get_queue_count,
     get_status,
+    manual_start,
     queue_file_path,
 )
 
@@ -70,6 +72,32 @@ def test_option_4_sets_skipped():
 
     assert saved["skipped"] is True
     assert saved.get("user_active") is False
+
+
+def test_option_5_sets_session_active(tmp_path):
+    config = {
+        **BASE_CONFIG,
+        "queue": {"vault_path": str(tmp_path), "queue_file": "active-projects.md"},
+    }
+    saved = {}
+    with patch("cli_menu.save_state", side_effect=lambda s: saved.update(s)):
+        _handle_option_5(config)
+    assert saved["session_active"] is True
+    assert saved["user_active"] is False
+    assert saved["skipped"] is False
+
+
+def test_manual_start_sets_clock(tmp_path):
+    config = {
+        **BASE_CONFIG,
+        "queue": {"vault_path": str(tmp_path), "queue_file": "active-projects.md"},
+    }
+    saved = {}
+    with patch("cli_menu.save_state", side_effect=lambda s: saved.update(s)):
+        manual_start(config)
+    assert saved["session_active"] is True
+    start = datetime.fromisoformat(saved["session_start"])
+    assert abs((start - datetime.now()).total_seconds()) < 2
 
 
 def test_get_queue_count_returns_zero_when_file_missing(tmp_path):

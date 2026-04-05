@@ -63,6 +63,44 @@ def manual_start(config: dict) -> None:
     print(f"Session clock set. Resets at {end.strftime('%I:%M %p')}.")
 
 
+def verify_session_clock(config: dict) -> None:
+    print("\n  Session Clock Verification")
+    print("  " + "-" * 40)
+    print("  This checks whether `claude -p \"k\"` starts the claude.ai")
+    print("  5-hour session window.\n")
+    print("  Step 1: Open https://claude.ai/settings/limits in your browser.")
+    print("          Note the current reset time (or confirm no session is active).")
+    print()
+
+    try:
+        input("  Press Enter when ready to send the kickoff... ")
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Cancelled.")
+        return
+
+    message = config["api"]["kickoff_message"]
+    print(f"\n  Sending: claude -p \"{message}\"")
+    result = subprocess.run(
+        ["claude", "-p", message],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    if result.returncode != 0:
+        print(f"  Error: {result.stderr.strip()}")
+        return
+
+    now = datetime.now()
+    expected_reset = now + timedelta(hours=config["session"]["session_hours"])
+    print(f"  Sent at {now.strftime('%I:%M:%S %p')}.")
+    print(f"  Expected reset time: {expected_reset.strftime('%I:%M %p')}\n")
+    print("  Step 2: Refresh https://claude.ai/settings/limits.")
+    print(f"          If the reset time is now ~{expected_reset.strftime('%I:%M %p')},")
+    print("          verification passed — the CLI starts the session clock.")
+    print("          If nothing changed, the CLI does not share the web session pool.\n")
+
+
 def _print_header(status: dict, queue_count: int) -> None:
     print("\n  Claude Session Manager")
     print("  " + "-" * 40)
@@ -109,6 +147,11 @@ def _handle_option_4(state: dict) -> None:
     print("\n  Session skipped. Daemon will idle until this session expires.\n")
 
 
+def _handle_option_5(config: dict) -> None:
+    manual_start(config)
+    print("  Daemon clock resynced.\n")
+
+
 def show_menu(config: dict, state: dict) -> None:
     while True:
         status = get_status(config, state)
@@ -119,6 +162,7 @@ def show_menu(config: dict, state: dict) -> None:
         print("  [2] Run project queue")
         print("  [3] View / edit queue")
         print("  [4] Skip this session")
+        print("  [5] Record manual session start")
         print()
 
         try:
@@ -135,20 +179,28 @@ def show_menu(config: dict, state: dict) -> None:
             return
         elif choice == "3":
             _handle_option_3(config)
-            state = load_state()  # re-read in case user edited queue
+            state = load_state()
         elif choice == "4":
             _handle_option_4(state)
             return
+        elif choice == "5":
+            _handle_option_5(config)
+            state = load_state()
         else:
-            print("  Invalid choice. Enter 1, 2, 3, or 4.\n")
+            print("  Invalid choice. Enter 1–5.\n")
 
 
 def main() -> None:
     config = load_config(CONFIG_FILE)
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--manual-start":
-        manual_start(config)
-        return
+    if len(sys.argv) > 1:
+        flag = sys.argv[1]
+        if flag == "--manual-start":
+            manual_start(config)
+            return
+        if flag == "--verify":
+            verify_session_clock(config)
+            return
 
     state = load_state()
     show_menu(config, state)
