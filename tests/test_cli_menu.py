@@ -1,11 +1,21 @@
 from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cli_menu import format_duration, get_status
+from cli_menu import (
+    _handle_option_1,
+    _handle_option_4,
+    format_duration,
+    get_queue_count,
+    get_status,
+    queue_file_path,
+)
 
 BASE_CONFIG = {
     "session": {"wake_time": "08:00", "kickoff_offset_h": 3, "session_hours": 5},
+    "queue": {"vault_path": "~/Documents/Obsidian", "queue_file": "active-projects.md"},
 }
 
 
@@ -38,3 +48,44 @@ def test_get_status_active_for_live_session():
     assert status["active"] is True
     assert "remaining" in status
     assert "resets" in status
+
+
+def test_option_1_sets_user_active():
+    state = {"session_active": True, "session_start": datetime.now().isoformat()}
+    saved = {}
+
+    with patch("cli_menu.save_state", side_effect=lambda s: saved.update(s)):
+        _handle_option_1(state)
+
+    assert saved["user_active"] is True
+    assert saved.get("skipped") is False
+
+
+def test_option_4_sets_skipped():
+    state = {"session_active": True, "session_start": datetime.now().isoformat()}
+    saved = {}
+
+    with patch("cli_menu.save_state", side_effect=lambda s: saved.update(s)):
+        _handle_option_4(state)
+
+    assert saved["skipped"] is True
+    assert saved.get("user_active") is False
+
+
+def test_get_queue_count_returns_zero_when_file_missing(tmp_path):
+    config = {
+        **BASE_CONFIG,
+        "queue": {"vault_path": str(tmp_path), "queue_file": "missing.md"},
+    }
+    assert get_queue_count(config) == 0
+
+
+def test_get_queue_count_counts_active_projects(tmp_path):
+    queue = tmp_path / "active-projects.md"
+    queue.write_text(
+        "## active-projects\n\n"
+        "### 1. Project A\nstatus: in-progress\n\n"
+        "### 2. Project B\nstatus: in-progress\n"
+    )
+    config = {**BASE_CONFIG, "queue": {"vault_path": str(tmp_path), "queue_file": "active-projects.md"}}
+    assert get_queue_count(config) == 2

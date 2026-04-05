@@ -86,6 +86,15 @@ def check_low_session_warning(config: dict, state: dict) -> None:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] Warning: {mins} minutes remaining.")
 
 
+def is_backed_off(state: dict) -> bool:
+    """True when the user has taken control (option 1) or skipped (option 4)."""
+    return bool(state.get("user_active") or state.get("skipped"))
+
+
+def clear_backoff(state: dict) -> dict:
+    return {**state, "user_active": False, "skipped": False, "warned": False}
+
+
 def run_daemon(config: dict) -> None:
     print("Claude Session Manager started. Press Ctrl+C to stop.")
 
@@ -94,15 +103,19 @@ def run_daemon(config: dict) -> None:
         end = session_end_time(config, state)
 
         if end is not None:
-            # Active session — monitor for expiry and low-time warning
+            if is_backed_off(state):
+                # User has taken control — idle, check every 5 minutes
+                time.sleep(300)
+                continue
+
+            # Active session — monitor for low-time warning
             check_low_session_warning(config, state)
             time.sleep(60)
             continue
 
         # Session is expired or never started
         if state.get("session_active"):
-            # Mark expired so next logic fires a new kickoff
-            state = {**state, "session_active": False, "warned": False}
+            state = clear_backoff({**state, "session_active": False})
             save_state(state)
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Session expired. Firing next kickoff.")
             fire_kickoff(config)

@@ -1,3 +1,5 @@
+import os
+import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -32,40 +34,113 @@ def get_status(config: dict, state: dict) -> dict:
     return {"active": False}
 
 
+def queue_file_path(config: dict) -> Path:
+    vault = Path(config["queue"]["vault_path"]).expanduser()
+    return vault / config["queue"]["queue_file"]
+
+
+def get_queue_count(config: dict) -> int:
+    path = queue_file_path(config)
+    if not path.exists():
+        return 0
+    text = path.read_text()
+    return sum(
+        1 for line in text.splitlines()
+        if line.startswith("### ") and "status: done" not in text.split(line)[1].split("###")[0]
+    )
+
+
 def manual_start(config: dict) -> None:
-    """Record a manually started session (user started Claude outside the daemon)."""
     now = datetime.now()
     end = now + timedelta(hours=config["session"]["session_hours"])
     save_state({
         "session_start": now.isoformat(),
         "session_active": True,
         "warned": False,
+        "user_active": False,
+        "skipped": False,
     })
     print(f"Session clock set. Resets at {end.strftime('%I:%M %p')}.")
 
 
-def show_status(config: dict, state: dict) -> None:
-    status = get_status(config, state)
+def _print_header(status: dict, queue_count: int) -> None:
     print("\n  Claude Session Manager")
-    print("  " + "-" * 32)
+    print("  " + "-" * 40)
     if status["active"]:
-        print(f"  Session:   ACTIVE")
-        print(f"  Started:   {status['started']}")
-        print(f"  Resets:    {status['resets']}")
-        print(f"  Remaining: {status['remaining']}")
+        print(f"  Session: ACTIVE  |  {status['remaining']} remaining")
     else:
-        wake_h, wake_m = map(int, config["session"]["wake_time"].split(":"))
-        offset_h = config["session"]["kickoff_offset_h"]
-        now = datetime.now()
-        next_fire = now.replace(
-            hour=wake_h, minute=wake_m, second=0, microsecond=0
-        ) - timedelta(hours=offset_h)
-        if next_fire <= now:
-            next_fire += timedelta(days=1)
-        label = "tomorrow" if next_fire.date() > now.date() else "today"
-        print(f"  Session:   INACTIVE")
-        print(f"  Next kickoff: {next_fire.strftime('%I:%M %p')} ({label})")
+        print(f"  Session: INACTIVE")
+    print(f"  Queue:   {queue_count} project{'s' if queue_count != 1 else ''}")
     print()
+
+
+def _handle_option_1(state: dict) -> None:
+    save_state({**state, "user_active": True, "skipped": False})
+    print("\n  Session is yours. Daemon has backed off.")
+    print("  It will resume automatically when this session expires.\n")
+
+
+def _handle_option_2() -> None:
+    print("\n  Queue execution coming in Phase 3.\n")
+
+
+def _handle_option_3(config: dict) -> None:
+    path = queue_file_path(config)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "## active-projects\n\n"
+            "### 1. Example Project\n"
+            "status: in-progress\n"
+            "next-step: Describe what Claude should do next\n"
+            "priority: high\n"
+        )
+        print(f"\n  Created queue file at {path}")
+
+    editor = os.environ.get("EDITOR")
+    if editor:
+        subprocess.run([editor, str(path)])
+    else:
+        subprocess.run(["open", "-t", str(path)])
+
+
+def _handle_option_4(state: dict) -> None:
+    save_state({**state, "skipped": True, "user_active": False})
+    print("\n  Session skipped. Daemon will idle until this session expires.\n")
+
+
+def show_menu(config: dict, state: dict) -> None:
+    while True:
+        status = get_status(config, state)
+        queue_count = get_queue_count(config)
+        _print_header(status, queue_count)
+
+        print("  [1] Use this session myself")
+        print("  [2] Run project queue")
+        print("  [3] View / edit queue")
+        print("  [4] Skip this session")
+        print()
+
+        try:
+            choice = input("  Choice: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+
+        if choice == "1":
+            _handle_option_1(state)
+            return
+        elif choice == "2":
+            _handle_option_2()
+            return
+        elif choice == "3":
+            _handle_option_3(config)
+            state = load_state()  # re-read in case user edited queue
+        elif choice == "4":
+            _handle_option_4(state)
+            return
+        else:
+            print("  Invalid choice. Enter 1, 2, 3, or 4.\n")
 
 
 def main() -> None:
@@ -76,7 +151,7 @@ def main() -> None:
         return
 
     state = load_state()
-    show_status(config, state)
+    show_menu(config, state)
 
 
 if __name__ == "__main__":
